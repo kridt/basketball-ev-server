@@ -1,0 +1,84 @@
+// evCalculator.js
+
+// Standard normal CDF approximation
+function normalCdf(z) {
+  const t = 1 / (1 + 0.2316419 * Math.abs(z));
+  const d = 0.3989423 * Math.exp((-z * z) / 2);
+  const prob =
+    d *
+    t *
+    (0.3193815 +
+      t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))));
+  return z > 0 ? 1 - prob : prob;
+}
+
+function mean(arr) {
+  if (!arr.length) return 0;
+  return arr.reduce((s, x) => s + x, 0) / arr.length;
+}
+
+function stdDev(arr) {
+  if (arr.length < 2) return 0;
+  const m = mean(arr);
+  const variance = arr.reduce((s, x) => s + (x - m) ** 2, 0) / (arr.length - 1);
+  return Math.sqrt(variance);
+}
+
+/**
+ * Compute probability + fair odds for a player prop.
+ *
+ * @param {Object} opts
+ * @param {number[]} seasonValues - all game values for stat this season
+ * @param {number[]} recentValues - last N values (recent form)
+ * @param {number} line - prop line (e.g. 27.5)
+ * @param {"over"|"under"} side
+ * @param {number} weightRecent - [0,1] (default 0.65 => 65% form, 35% season)
+ */
+function computePropProb({
+  seasonValues,
+  recentValues,
+  line,
+  side,
+  weightRecent = 0.65,
+}) {
+  if (!seasonValues.length) {
+    throw new Error("No season data found for this player/stat");
+  }
+
+  const seasonAvg = mean(seasonValues);
+  const recentAvg = recentValues.length ? mean(recentValues) : seasonAvg;
+
+  // 65% recent form, 35% season baseline
+  const mu = weightRecent * recentAvg + (1 - weightRecent) * seasonAvg;
+
+  let sigma = recentValues.length ? stdDev(recentValues) : 0;
+  if (sigma === 0) {
+    // crude fallback: don't pretend zero volatility
+    sigma = 0.4 * seasonAvg || 1;
+  }
+
+  let z, p;
+  if (side === "over") {
+    // continuity correction
+    z = (line + 0.5 - mu) / sigma;
+    p = 1 - normalCdf(z);
+  } else {
+    z = (line - 0.5 - mu) / sigma;
+    p = normalCdf(z);
+  }
+
+  const fairOdds = 1 / p;
+
+  return {
+    seasonAvg,
+    recentAvg,
+    mu,
+    sigma,
+    p,
+    fairOdds,
+  };
+}
+
+module.exports = {
+  computePropProb,
+};
