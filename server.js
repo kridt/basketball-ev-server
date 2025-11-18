@@ -87,17 +87,34 @@ async function bdFetch(url) {
   return res.json();
 }
 
-// 1) Get next N games (from today forward, regular season only)
+// 1) Get next N games (from today forward in CET timezone, regular season only)
 async function fetchNextGames(limit = 10) {
-  const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  // Get current date in CET (Europe/Paris) timezone
+  const nowCET = new Date().toLocaleString("en-US", { timeZone: "Europe/Paris" });
+  const cetDate = new Date(nowCET);
+
+  // Start from yesterday to ensure we catch all games happening "today" in CET
+  const yesterday = new Date(cetDate);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const startDate = yesterday.toISOString().slice(0, 10); // YYYY-MM-DD
+
   const url = new URL(`${BASE_URL}/games`);
-  url.searchParams.append("start_date", today);
+  url.searchParams.append("start_date", startDate);
   url.searchParams.append("seasons[]", CURRENT_SEASON);
-  url.searchParams.append("per_page", limit);
+  url.searchParams.append("per_page", limit * 2); // Fetch more to filter client-side
   url.searchParams.append("postseason", "false");
 
   const json = await bdFetch(url.toString());
-  return json.data || [];
+
+  // Filter to only include games that haven't started yet in CET
+  const now = Date.now();
+  const upcomingGames = (json.data || []).filter(game => {
+    const gameTime = new Date(game.datetime).getTime();
+    return gameTime > now;
+  });
+
+  // Return only the requested number of upcoming games
+  return upcomingGames.slice(0, limit);
 }
 
 // 2) Get all players for a given team
@@ -298,7 +315,7 @@ app.get("/api/recommended-bets", async (req, res) => {
   const perGame = req.query.perGame ? Number(req.query.perGame) : 5;
 
   // How many games and players to scan
-  const gameLimit = req.query.games ? Number(req.query.games) : 2; // default: 2 games
+  const gameLimit = req.query.games ? Number(req.query.games) : 5; // default: 5 games
   const maxPlayersPerTeam = req.query.maxPlayersPerTeam
     ? Number(req.query.maxPlayersPerTeam)
     : 6; // default: 6 players per team
