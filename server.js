@@ -302,6 +302,68 @@ function generateBetsForPlayer({
   return bets;
 }
 
+// ---------------- STATS ENDPOINT FOR RESULT VERIFICATION ----------------
+//
+// GET /api/player-stats?game_id=123&player_id=456
+// Fetches completed game stats for a specific player
+//
+app.get("/api/player-stats", async (req, res) => {
+  const gameId = req.query.game_id;
+  const playerId = req.query.player_id;
+
+  if (!gameId || !playerId) {
+    return res.status(400).json({
+      error: "Missing required parameters",
+      details: "Both game_id and player_id are required",
+    });
+  }
+
+  try {
+    console.log(`Fetching stats for player ${playerId} in game ${gameId}...`);
+
+    const url = new URL(`${BASE_URL}/stats`);
+    url.searchParams.append("game_ids[]", gameId);
+    url.searchParams.append("player_ids[]", playerId);
+    url.searchParams.append("per_page", 1); // We only need one result
+
+    const json = await bdFetch(url.toString());
+
+    if (!json.data || json.data.length === 0) {
+      return res.status(404).json({
+        error: "Stats not found",
+        details: `No stats found for player ${playerId} in game ${gameId}`,
+      });
+    }
+
+    const stats = json.data[0];
+
+    // Return formatted stats
+    res.json({
+      success: true,
+      data: {
+        gameId: stats.game.id,
+        playerId: stats.player.id,
+        playerName: `${stats.player.first_name} ${stats.player.last_name}`,
+        gameDate: stats.game.date,
+        minutesPlayed: stats.min,
+        stats: {
+          pts: stats.pts || 0,
+          reb: stats.reb || 0,
+          ast: stats.ast || 0,
+          fg3m: stats.fg3m || 0,
+          pra: (stats.pts || 0) + (stats.reb || 0) + (stats.ast || 0),
+          pr: (stats.pts || 0) + (stats.reb || 0),
+          pa: (stats.pts || 0) + (stats.ast || 0),
+          ra: (stats.reb || 0) + (stats.ast || 0),
+        },
+      },
+    });
+  } catch (err) {
+    console.error("Error fetching player stats:", err);
+    res.status(500).json({ error: "Internal error", details: err.message });
+  }
+});
+
 // ---------------- MAIN ENDPOINT ----------------
 //
 // GET /api/recommended-bets?minProb=0.58&maxProb=0.62&perGame=5&games=2&maxPlayersPerTeam=6
