@@ -535,7 +535,7 @@ const eplTeamStatExtractors = {
   yellow_cards: (s) => s.total_yel_card || 0,
   red_cards: (s) => s.red_card || 0,
   offsides: (s) => s.total_offside || 0,
-  corners: (s) => s.att_corner || 0,
+  corners: (s) => s.corner_taken || 0,
   passes: (s) => s.total_pass || 0,
   touches: (s) => s.touches || 0,
   shots_on_target: (s) => s.ontarget_scoring_att || 0,
@@ -752,7 +752,7 @@ async function fetchEPLTeamRecentGames(teamId, limit = 10) {
           console.log(`[EPL] ALL stats for game ${game.id} (${allKeys.length} keys):`, allKeys);
           // Log specific stats we care about
           console.log(`[EPL] Key stats:`, {
-            corners: statsObj.att_corner || statsObj.corner_taken || statsObj.corners,
+            corners: statsObj.corner_taken || statsObj.corners,
             shots: statsObj.ontarget_scoring_att || statsObj.total_scoring_att,
             cards: statsObj.total_yel_card || statsObj.yellow_card,
             fouls: statsObj.fk_foul_lost || statsObj.fouls,
@@ -1524,7 +1524,7 @@ app.get("/api/epl/match/:gameId/analysis", async (req, res) => {
           isHome,
           score: g.score || null,
           stats: {
-            corners: teamStats?.att_corner || teamStats?.corners || 0,
+            corners: teamStats?.corner_taken || teamStats?.corners || 0,
             yellowCards: teamStats?.total_yel_card || teamStats?.yellow_cards || 0,
             redCards: teamStats?.red_card || teamStats?.red_cards || 0,
             shotsOnTarget: teamStats?.ontarget_scoring_att || teamStats?.shots_on_goal || 0,
@@ -1534,7 +1534,7 @@ app.get("/api/epl/match/:gameId/analysis", async (req, res) => {
             possession: teamStats?.possession_percentage || teamStats?.possession || 0,
           },
           opponentStats: {
-            corners: opponentStats?.att_corner || opponentStats?.corners || 0,
+            corners: opponentStats?.corner_taken || opponentStats?.corners || 0,
             yellowCards: opponentStats?.total_yel_card || opponentStats?.yellow_cards || 0,
             redCards: opponentStats?.red_card || opponentStats?.red_cards || 0,
             shotsOnTarget: opponentStats?.ontarget_scoring_att || opponentStats?.shots_on_goal || 0,
