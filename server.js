@@ -746,9 +746,17 @@ async function fetchEPLTeamRecentGames(teamId, limit = 10) {
       for (const team of teams) {
         const statsObj = convertStatsArrayToObject(team.stats);
 
-        // Log first game's stats for debugging
+        // Log first game's stats for debugging - show ALL keys
         if (gamesWithStats.length === 0) {
-          console.log(`[EPL] Sample stats for game ${game.id}:`, Object.keys(statsObj).slice(0, 10));
+          const allKeys = Object.keys(statsObj);
+          console.log(`[EPL] ALL stats for game ${game.id} (${allKeys.length} keys):`, allKeys);
+          // Log specific stats we care about
+          console.log(`[EPL] Key stats:`, {
+            corners: statsObj.att_corner || statsObj.corner_taken || statsObj.corners,
+            shots: statsObj.ontarget_scoring_att || statsObj.total_scoring_att,
+            cards: statsObj.total_yel_card || statsObj.yellow_card,
+            fouls: statsObj.fk_foul_lost || statsObj.fouls,
+          });
         }
 
         if (team.team_id === game.home_team_id) {
@@ -1465,20 +1473,28 @@ app.get("/api/epl/match/:gameId/analysis", async (req, res) => {
     }
 
     if (!game) {
-      // Try to fetch the game directly
-      const url = `${API_BASE}/epl/v1/games/${gameId}`;
-      const json = await bdFetch(url);
-      if (json.data) {
-        const teamsMap = await fetchAllEPLTeams();
-        game = {
-          gameId: json.data.id,
-          kickoff: json.data.kickoff,
-          status: json.data.status,
-          home_team: teamsMap[json.data.home_team_id] || { id: json.data.home_team_id, name: `Team ${json.data.home_team_id}` },
-          away_team: teamsMap[json.data.away_team_id] || { id: json.data.away_team_id, name: `Team ${json.data.away_team_id}` },
-          home_team_id: json.data.home_team_id,
-          away_team_id: json.data.away_team_id,
-        };
+      // Try to fetch the game by searching recent games
+      try {
+        const url = new URL(`${API_BASE}/epl/v1/games`);
+        url.searchParams.append("season", CURRENT_EPL_SEASON);
+        url.searchParams.append("per_page", 100);
+        const json = await bdFetch(url.toString());
+
+        const foundGame = (json.data || []).find(g => g.id === gameId);
+        if (foundGame) {
+          const teamsMap = await fetchAllEPLTeams();
+          game = {
+            gameId: foundGame.id,
+            kickoff: foundGame.kickoff,
+            status: foundGame.status,
+            home_team: teamsMap[foundGame.home_team_id] || { id: foundGame.home_team_id, name: `Team ${foundGame.home_team_id}` },
+            away_team: teamsMap[foundGame.away_team_id] || { id: foundGame.away_team_id, name: `Team ${foundGame.away_team_id}` },
+            home_team_id: foundGame.home_team_id,
+            away_team_id: foundGame.away_team_id,
+          };
+        }
+      } catch (err) {
+        console.error(`[EPL Analysis] Could not fetch game ${gameId}:`, err.message);
       }
     }
 
