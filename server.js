@@ -1439,6 +1439,145 @@ app.post("/api/epl/refresh-cache", async (req, res) => {
   res.json({ message: 'Cache refresh started' });
 });
 
+// GET /api/epl/match/:gameId/analysis - Get detailed match analysis with team stats
+app.get("/api/epl/match/:gameId/analysis", async (req, res) => {
+  try {
+    const gameId = parseInt(req.params.gameId);
+    console.log(`[EPL Analysis] Fetching analysis for game ${gameId}`);
+
+    // First, find the game in the cache or fetch it
+    let game = null;
+    if (cache.epl.data?.matches) {
+      game = cache.epl.data.matches.find(m => m.gameId === gameId);
+    }
+
+    if (!game) {
+      // Try to fetch the game directly
+      const url = `${API_BASE}/epl/v1/games/${gameId}`;
+      const json = await bdFetch(url);
+      if (json.data) {
+        const teamsMap = await fetchAllEPLTeams();
+        game = {
+          gameId: json.data.id,
+          kickoff: json.data.kickoff,
+          status: json.data.status,
+          home_team: teamsMap[json.data.home_team_id] || { id: json.data.home_team_id, name: `Team ${json.data.home_team_id}` },
+          away_team: teamsMap[json.data.away_team_id] || { id: json.data.away_team_id, name: `Team ${json.data.away_team_id}` },
+          home_team_id: json.data.home_team_id,
+          away_team_id: json.data.away_team_id,
+        };
+      }
+    }
+
+    if (!game) {
+      return res.status(404).json({ error: 'Game not found' });
+    }
+
+    // Fetch recent games for both teams
+    console.log(`[EPL Analysis] Fetching recent games for ${game.home_team.name} and ${game.away_team.name}`);
+
+    const [homeRecentGames, awayRecentGames] = await Promise.all([
+      fetchEPLTeamRecentGames(game.home_team_id || game.home_team.id, 10),
+      fetchEPLTeamRecentGames(game.away_team_id || game.away_team.id, 10),
+    ]);
+
+    // Format the response with detailed stats
+    const formatGameStats = (games, teamId, teamName) => {
+      return games.map(g => {
+        const isHome = g.home_team_id === teamId;
+        const teamStats = isHome ? g.home_team_stats : g.away_team_stats;
+        const opponentStats = isHome ? g.away_team_stats : g.home_team_stats;
+
+        return {
+          gameId: g.id,
+          date: g.kickoff,
+          opponent: isHome ? g.away_team?.name || `Team ${g.away_team_id}` : g.home_team?.name || `Team ${g.home_team_id}`,
+          isHome,
+          score: g.score || null,
+          stats: {
+            corners: teamStats?.corners || 0,
+            yellowCards: teamStats?.yellow_cards || 0,
+            redCards: teamStats?.red_cards || 0,
+            shotsOnTarget: teamStats?.shots_on_goal || 0,
+            shotsTotal: (teamStats?.shots_on_goal || 0) + (teamStats?.shots_off_goal || 0),
+            offsides: teamStats?.offsides || 0,
+            fouls: teamStats?.fouls || 0,
+            possession: teamStats?.possession || 0,
+          },
+          opponentStats: {
+            corners: opponentStats?.corners || 0,
+            yellowCards: opponentStats?.yellow_cards || 0,
+            redCards: opponentStats?.red_cards || 0,
+            shotsOnTarget: opponentStats?.shots_on_goal || 0,
+            shotsTotal: (opponentStats?.shots_on_goal || 0) + (opponentStats?.shots_off_goal || 0),
+            offsides: opponentStats?.offsides || 0,
+            fouls: opponentStats?.fouls || 0,
+            possession: opponentStats?.possession || 0,
+          },
+        };
+      });
+    };
+
+    // Calculate averages
+    const calculateAverages = (formattedGames) => {
+      if (formattedGames.length === 0) return null;
+
+      const sum = formattedGames.reduce((acc, g) => ({
+        corners: acc.corners + g.stats.corners,
+        yellowCards: acc.yellowCards + g.stats.yellowCards,
+        redCards: acc.redCards + g.stats.redCards,
+        shotsOnTarget: acc.shotsOnTarget + g.stats.shotsOnTarget,
+        shotsTotal: acc.shotsTotal + g.stats.shotsTotal,
+        offsides: acc.offsides + g.stats.offsides,
+        fouls: acc.fouls + g.stats.fouls,
+      }), { corners: 0, yellowCards: 0, redCards: 0, shotsOnTarget: 0, shotsTotal: 0, offsides: 0, fouls: 0 });
+
+      const count = formattedGames.length;
+      return {
+        corners: (sum.corners / count).toFixed(1),
+        yellowCards: (sum.yellowCards / count).toFixed(1),
+        redCards: (sum.redCards / count).toFixed(1),
+        shotsOnTarget: (sum.shotsOnTarget / count).toFixed(1),
+        shotsTotal: (sum.shotsTotal / count).toFixed(1),
+        offsides: (sum.offsides / count).toFixed(1),
+        fouls: (sum.fouls / count).toFixed(1),
+      };
+    };
+
+    const homeFormatted = formatGameStats(homeRecentGames, game.home_team_id || game.home_team.id, game.home_team.name);
+    const awayFormatted = formatGameStats(awayRecentGames, game.away_team_id || game.away_team.id, game.away_team.name);
+
+    const response = {
+      game: {
+        id: game.gameId,
+        kickoff: game.kickoff,
+        status: game.status,
+        homeTeam: game.home_team,
+        awayTeam: game.away_team,
+      },
+      homeTeam: {
+        name: game.home_team.name,
+        recentGames: homeFormatted,
+        averages: calculateAverages(homeFormatted),
+        gamesAnalyzed: homeFormatted.length,
+      },
+      awayTeam: {
+        name: game.away_team.name,
+        recentGames: awayFormatted,
+        averages: calculateAverages(awayFormatted),
+        gamesAnalyzed: awayFormatted.length,
+      },
+    };
+
+    console.log(`[EPL Analysis] Returning analysis with ${homeFormatted.length} home games and ${awayFormatted.length} away games`);
+    res.json(response);
+
+  } catch (err) {
+    console.error("[EPL Analysis] Error:", err);
+    res.status(500).json({ error: "Internal error", details: err.message });
+  }
+});
+
 // ---------------- NBA ENDPOINTS ----------------
 
 // GET /api/nba/todays-props - Get today's NBA props (from cache)
