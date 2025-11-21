@@ -1573,8 +1573,26 @@ app.get("/api/epl/match/:gameId/analysis", async (req, res) => {
       };
     };
 
-    const homeFormatted = formatGameStats(homeRecentGames, game.home_team_id || game.home_team.id, game.home_team.name);
-    const awayFormatted = formatGameStats(awayRecentGames, game.away_team_id || game.away_team.id, game.away_team.name);
+    const homeTeamId = game.home_team_id || game.home_team.id;
+    const awayTeamId = game.away_team_id || game.away_team.id;
+
+    console.log(`[EPL Analysis] Home team ID: ${homeTeamId}, Away team ID: ${awayTeamId}`);
+    console.log(`[EPL Analysis] Home recent games: ${homeRecentGames.length}, Away recent games: ${awayRecentGames.length}`);
+
+    if (homeRecentGames.length > 0) {
+      const firstGame = homeRecentGames[0];
+      console.log(`[EPL Analysis] First home game:`, {
+        id: firstGame.id,
+        home_team_id: firstGame.home_team_id,
+        away_team_id: firstGame.away_team_id,
+        home_team_name: firstGame.home_team?.name,
+        away_team_name: firstGame.away_team?.name,
+        stats_keys: Object.keys(firstGame.home_team_stats || {}).length,
+      });
+    }
+
+    const homeFormatted = formatGameStats(homeRecentGames, homeTeamId, game.home_team.name);
+    const awayFormatted = formatGameStats(awayRecentGames, awayTeamId, game.away_team.name);
 
     const response = {
       game: {
