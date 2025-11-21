@@ -719,10 +719,15 @@ async function fetchEPLTeamRecentGames(teamId, limit = 10) {
 
   const json = await bdFetch(url.toString());
 
+  // Get teams mapping for names
+  const teamsMap = await fetchAllEPLTeams();
+
   // Filter only completed games (EPL uses "FullTime" for completed matches)
   const completedGames = (json.data || []).filter(
-    (game) => game.status === "FullTime" || game.status === "C" || game.status === "complete" || game.status === "Final"
+    (game) => game.status === "FullTime" || game.status === "FT" || game.status === "C" || game.status === "complete" || game.status === "Final"
   );
+
+  console.log(`[EPL] Found ${completedGames.length} completed games for team ${teamId}`);
 
   const gamesWithStats = [];
 
@@ -741,6 +746,11 @@ async function fetchEPLTeamRecentGames(teamId, limit = 10) {
       for (const team of teams) {
         const statsObj = convertStatsArrayToObject(team.stats);
 
+        // Log first game's stats for debugging
+        if (gamesWithStats.length === 0) {
+          console.log(`[EPL] Sample stats for game ${game.id}:`, Object.keys(statsObj).slice(0, 10));
+        }
+
         if (team.team_id === game.home_team_id) {
           homeStats = statsObj;
         } else if (team.team_id === game.away_team_id) {
@@ -748,8 +758,11 @@ async function fetchEPLTeamRecentGames(teamId, limit = 10) {
         }
       }
 
+      // Add team names from teamsMap
       gamesWithStats.push({
         ...game,
+        home_team: teamsMap[game.home_team_id] || { id: game.home_team_id, name: `Team ${game.home_team_id}` },
+        away_team: teamsMap[game.away_team_id] || { id: game.away_team_id, name: `Team ${game.away_team_id}` },
         home_team_stats: homeStats,
         away_team_stats: awayStats,
       });
