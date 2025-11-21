@@ -40,42 +40,16 @@ if (!API_KEY) {
 
 // ---------------- CORS SETUP ----------------
 
-const ALLOWED_ORIGINS = [
-  "https://betapi-frontend.vercel.app",
-  "http://localhost:5173",
-  "http://localhost:5174",
-  "http://localhost:3000",
-];
-
 app.use((req, res, next) => {
-  const origin = req.headers.origin;
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
 
-  // Allow non-browser tools (curl, Insomnia, server-to-server)
-  if (!origin) {
-    return next();
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(204);
   }
 
-  if (ALLOWED_ORIGINS.includes(origin)) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
-    res.setHeader("Vary", "Origin");
-    res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-    res.setHeader(
-      "Access-Control-Allow-Headers",
-      "Content-Type, Authorization"
-    );
-
-    if (req.method === "OPTIONS") {
-      return res.sendStatus(204);
-    }
-
-    return next();
-  }
-
-  // Any other browser origin is blocked
-  return res.status(403).json({
-    error: "Origin not allowed",
-    details: `Origin ${origin} is not allowed to access this resource`,
-  });
+  next();
 });
 
 // ---------------- HEALTH CHECK ----------------
