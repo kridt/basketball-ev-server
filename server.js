@@ -46,6 +46,14 @@ if (!API_KEY) {
   console.warn("WARNING: BALLDONTLIE_API_KEY is not set in .env");
 }
 
+// Football-Data.org API Key check
+const FOOTBALL_DATA_API_KEY = process.env.FOOTBALL_DATA_API_KEY;
+if (!FOOTBALL_DATA_API_KEY || FOOTBALL_DATA_API_KEY === 'YOUR_API_KEY_HERE') {
+  console.warn("WARNING: FOOTBALL_DATA_API_KEY is not configured - multi-league support disabled");
+} else {
+  console.log("✅ FOOTBALL_DATA_API_KEY is configured - multi-league support enabled");
+}
+
 // ---------------- CORS SETUP ----------------
 
 app.use((req, res, next) => {
@@ -2238,9 +2246,13 @@ app.listen(PORT, () => {
 
   // Football-data.org multi-league cache (only if API key is configured)
   if (process.env.FOOTBALL_DATA_API_KEY && process.env.FOOTBALL_DATA_API_KEY !== 'YOUR_API_KEY_HERE') {
-    setTimeout(() => {
-      console.log('[CACHE] Populating multi-league football cache...');
-      refreshFootballCache();
+    setTimeout(async () => {
+      // Test API connection first
+      const connected = await footballDataService.testConnection();
+      if (connected) {
+        console.log('[CACHE] Populating multi-league football cache...');
+        refreshFootballCache();
+      }
     }, 15000); // 15 second delay
   } else {
     console.log('[CACHE] Skipping multi-league football cache - FOOTBALL_DATA_API_KEY not configured');

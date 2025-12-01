@@ -59,6 +59,32 @@ class FootballDataService {
   }
 
   /**
+   * Test API connection and log status
+   */
+  async testConnection() {
+    try {
+      console.log('[Football-Data] Testing API connection...');
+      const data = await this.apiRequest('/competitions');
+      const competitions = data.competitions || [];
+      console.log('═══════════════════════════════════════════════════════════');
+      console.log('✅ FOOTBALL-DATA.ORG API CONNECTED SUCCESSFULLY');
+      console.log('═══════════════════════════════════════════════════════════');
+      console.log(`   Available competitions: ${competitions.length}`);
+      console.log(`   Supported leagues: ${Object.keys(this.leagues).join(', ')}`);
+      console.log('═══════════════════════════════════════════════════════════');
+      return true;
+    } catch (error) {
+      console.error('═══════════════════════════════════════════════════════════');
+      console.error('❌ FOOTBALL-DATA.ORG API CONNECTION FAILED');
+      console.error('═══════════════════════════════════════════════════════════');
+      console.error(`   Error: ${error.message}`);
+      console.error('   Check your FOOTBALL_DATA_API_KEY in environment variables');
+      console.error('═══════════════════════════════════════════════════════════');
+      return false;
+    }
+  }
+
+  /**
    * Get list of available competitions
    */
   async getCompetitions() {
