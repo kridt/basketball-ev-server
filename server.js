@@ -8,6 +8,7 @@ const {
   computePlayerPropProb,
   computeMatchStatProb,
 } = require("./evCalculatorFootball");
+const eplOddsService = require("./eplOddsService");
 
 const app = express();
 app.use(express.json());
@@ -1628,9 +1629,10 @@ app.get("/api/epl/match/:gameId/analysis", async (req, res) => {
 // ---------------- EV BETS ENDPOINT (for betsapi-dk-next10 frontend) ----------------
 
 // GET /api/ev-bets - Get value bets in the format expected by the frontend
-app.get("/api/ev-bets", (req, res) => {
+app.get("/api/ev-bets", async (req, res) => {
   try {
-    const { minEV = 0, maxOdds = 10, limit = 100, league } = req.query;
+    const { minEV = 0, maxOdds = 10, limit = 100, league, fetchOdds = 'true' } = req.query;
+    const shouldFetchOdds = fetchOdds === 'true';
 
     // Check if EPL cache is available
     if (!cache.epl.data || !cache.epl.data.matches) {
@@ -1655,15 +1657,57 @@ app.get("/api/ev-bets", (req, res) => {
     const valueBetMatches = [];
 
     for (const match of cache.epl.data.matches) {
+      // Fetch real bookmaker odds for this match if enabled
+      let matchOdds = null;
+      if (shouldFetchOdds) {
+        try {
+          matchOdds = await eplOddsService.getAllMatchOdds(
+            match.home_team.name,
+            match.away_team.name
+          );
+        } catch (e) {
+          console.log(`[EV-BETS] Could not fetch odds for ${match.home_team.name} vs ${match.away_team.name}:`, e.message);
+        }
+      }
+
       // Filter predictions and convert to value bets format
+      // ONLY include bets with REAL bookmaker odds - no estimated/fair value
       const valueBets = match.predictions
         .filter(pred => pred.probability >= 59) // Only high probability predictions
         .map(pred => {
-          // Calculate EV assuming we can find bookmaker odds ~5% higher than fair
           const fairOdds = pred.fairOdds;
-          const estimatedBestOdds = Number((fairOdds * 1.05).toFixed(2)); // Assume bookmaker offers 5% higher
           const probDecimal = pred.probability / 100;
-          const ev = ((probDecimal * estimatedBestOdds) - 1) * 100;
+
+          // Only use real bookmaker odds - no fallbacks
+          let bestBookmaker = null;
+          let bestOdds = null;
+          let allBookmakers = [];
+          let hasRealOdds = false;
+
+          if (matchOdds) {
+            const realOdds = eplOddsService.findBestOddsForPrediction(pred, matchOdds);
+            if (realOdds && realOdds.bestOdds && realOdds.bestBookmaker) {
+              bestBookmaker = realOdds.bestBookmaker;
+              bestOdds = realOdds.bestOdds;
+              hasRealOdds = true;
+              allBookmakers = realOdds.allBookmakers
+                .filter(b => b.bookmaker && b.odds) // Only include valid bookmakers
+                .map(b => ({
+                  bookmaker: b.bookmaker,
+                  odds: b.odds,
+                  line: b.line,
+                  url: null,
+                  ev: Number((((probDecimal * b.odds) - 1) * 100).toFixed(1))
+                }));
+            }
+          }
+
+          // If no real odds found, return null (will be filtered out)
+          if (!hasRealOdds || !bestBookmaker || !bestOdds) {
+            return null;
+          }
+
+          const ev = ((probDecimal * bestOdds) - 1) * 100;
 
           return {
             matchId: `EPL_${match.gameId}`,
@@ -1677,21 +1721,16 @@ app.get("/api/ev-bets", (req, res) => {
             homeAvg: pred.homeAvg || 0,
             awayAvg: pred.awayAvg || 0,
             confidence: pred.probability >= 61 ? 'high' : pred.probability >= 59 ? 'medium' : 'low',
-            // Placeholder bookmaker data since we don't have live odds
-            bestBookmaker: 'Fair Value',
-            bestOdds: Number(estimatedBestOdds.toFixed(2)),
+            bestBookmaker: bestBookmaker,
+            bestOdds: Number(bestOdds.toFixed(2)),
             bestEV: Number(ev.toFixed(1)),
             bestUrl: null,
-            allBookmakers: [{
-              bookmaker: 'Fair Value',
-              odds: Number(estimatedBestOdds.toFixed(2)),
-              line: pred.line,
-              url: null,
-              ev: Number(ev.toFixed(1))
-            }],
-            type: pred.type || 'match'
+            allBookmakers: allBookmakers,
+            type: pred.type || 'match',
+            hasRealOdds: true
           };
         })
+        .filter(bet => bet !== null) // Remove bets without real odds
         .filter(bet => bet.bestOdds <= parseFloat(maxOdds) && bet.bestEV >= parseFloat(minEV));
 
       if (valueBets.length > 0) {
@@ -1704,7 +1743,8 @@ app.get("/api/ev-bets", (req, res) => {
           leagueCode: 'PL',
           valueBets: valueBets.slice(0, 10), // Limit per match
           bestEV: Math.max(...valueBets.map(b => b.bestEV)),
-          totalEV: valueBets.reduce((sum, b) => sum + b.bestEV, 0)
+          totalEV: valueBets.reduce((sum, b) => sum + b.bestEV, 0),
+          hasRealOdds: valueBets.some(b => b.hasRealOdds)
         });
       }
     }
@@ -1720,7 +1760,8 @@ app.get("/api/ev-bets", (req, res) => {
       totalMatches: limitedMatches.length,
       source: 'cache',
       cacheUpdatedAt: cache.epl.lastUpdated,
-      generatedAt: new Date().toISOString()
+      generatedAt: new Date().toISOString(),
+      oddsSource: shouldFetchOdds ? 'live' : 'estimated'
     });
 
   } catch (err) {
@@ -1746,6 +1787,86 @@ app.post("/api/ev-bets/refresh", async (req, res) => {
     });
   } catch (err) {
     console.error("[EV-BETS] Refresh error:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/odds/match - Get live odds for a specific EPL match
+app.get("/api/odds/match", async (req, res) => {
+  try {
+    const { homeTeam, awayTeam } = req.query;
+
+    if (!homeTeam || !awayTeam) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required parameters: homeTeam, awayTeam'
+      });
+    }
+
+    console.log(`[ODDS] Fetching odds for ${homeTeam} vs ${awayTeam}`);
+
+    const matchOdds = await eplOddsService.getAllMatchOdds(homeTeam, awayTeam);
+
+    if (!matchOdds) {
+      return res.json({
+        success: false,
+        message: 'No odds found for this match',
+        homeTeam,
+        awayTeam
+      });
+    }
+
+    res.json({
+      success: true,
+      match: {
+        homeTeam: matchOdds.homeTeam,
+        awayTeam: matchOdds.awayTeam,
+        kickoff: matchOdds.kickoff
+      },
+      odds: matchOdds.odds,
+      summary: {
+        goalsMarkets: matchOdds.odds.goals.length,
+        cornersMarkets: matchOdds.odds.corners.length,
+        cardsMarkets: matchOdds.odds.cards.length,
+        shotsMarkets: matchOdds.odds.shots.length
+      }
+    });
+  } catch (err) {
+    console.error("[ODDS] Error:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/odds/search - Search for EPL matches with odds
+app.get("/api/odds/search", async (req, res) => {
+  try {
+    const { team } = req.query;
+
+    if (!team) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required parameter: team'
+      });
+    }
+
+    console.log(`[ODDS] Searching for matches: ${team}`);
+
+    const matches = await eplOddsService.searchEPLMatches(team);
+
+    res.json({
+      success: true,
+      matches: matches.map(m => ({
+        id: m.id,
+        homeTeam: m.home,
+        awayTeam: m.away,
+        kickoff: m.date,
+        league: m.league?.name || 'Premier League',
+        status: m.status
+      })),
+      count: matches.length
+    });
+  } catch (err) {
+    console.error("[ODDS] Search error:", err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
