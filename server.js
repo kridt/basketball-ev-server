@@ -9,6 +9,7 @@ const {
   computeMatchStatProb,
 } = require("./evCalculatorFootball");
 const eplOddsService = require("./eplOddsService");
+const footballDataService = require("./footballDataService");
 
 const app = express();
 app.use(express.json());
@@ -21,6 +22,12 @@ const cache = {
     isLoading: false,
   },
   nba: {
+    data: null,
+    lastUpdated: null,
+    isLoading: false,
+  },
+  // Multi-league football cache (football-data.org)
+  football: {
     data: null,
     lastUpdated: null,
     isLoading: false,
@@ -1871,6 +1878,265 @@ app.get("/api/odds/search", async (req, res) => {
   }
 });
 
+// ================ MULTI-LEAGUE FOOTBALL SECTION (football-data.org) ================
+
+/**
+ * Refresh multi-league football cache using football-data.org
+ */
+async function refreshFootballCache() {
+  if (cache.football.isLoading) {
+    console.log('[CACHE] Football cache refresh already in progress, skipping...');
+    return;
+  }
+
+  cache.football.isLoading = true;
+  console.log('[CACHE] Starting multi-league football cache refresh...');
+
+  try {
+    const minProb = 0.58;
+    const maxProb = 0.62;
+
+    // Get all value bets across all leagues
+    const matchesWithPredictions = await footballDataService.getAllValueBets(minProb, maxProb);
+
+    // Transform to EV bets format with bookmaker odds
+    const valueBetMatches = [];
+
+    for (const match of matchesWithPredictions) {
+      // Try to fetch real bookmaker odds
+      let matchOdds = null;
+      try {
+        matchOdds = await eplOddsService.getAllMatchOdds(
+          match.homeTeam.name,
+          match.awayTeam.name
+        );
+      } catch (e) {
+        console.log(`[Football] Could not fetch odds for ${match.homeTeam.name} vs ${match.awayTeam.name}`);
+      }
+
+      const valueBets = match.predictions
+        .filter(pred => pred.probability >= 0.59)
+        .map(pred => {
+          const probDecimal = pred.probability;
+
+          // Find real bookmaker odds
+          let bestBookmaker = null;
+          let bestOdds = null;
+          let allBookmakers = [];
+          let hasRealOdds = false;
+
+          if (matchOdds) {
+            const realOdds = eplOddsService.findBestOddsForPrediction(pred, matchOdds);
+            if (realOdds && realOdds.bestOdds && realOdds.bestBookmaker) {
+              bestBookmaker = realOdds.bestBookmaker;
+              bestOdds = realOdds.bestOdds;
+              hasRealOdds = true;
+              allBookmakers = realOdds.allBookmakers
+                .filter(b => b.bookmaker && b.odds)
+                .map(b => ({
+                  bookmaker: b.bookmaker,
+                  odds: b.odds,
+                  line: b.line,
+                  url: null,
+                  ev: Number((((probDecimal * b.odds) - 1) * 100).toFixed(1))
+                }));
+            }
+          }
+
+          // Skip bets without real odds
+          if (!hasRealOdds || !bestBookmaker || !bestOdds) {
+            return null;
+          }
+
+          const ev = ((probDecimal * bestOdds) - 1) * 100;
+
+          return {
+            matchId: `${match.leagueCode}_${match.matchId}`,
+            statKey: pred.statKey,
+            market: pred.statKey,
+            selection: pred.side,
+            line: pred.line,
+            probability: Number((pred.probability * 100).toFixed(1)),
+            fairOdds: Number(pred.fairOdds.toFixed(3)),
+            predictedTotal: pred.matchPrediction,
+            homeAvg: pred.homeAvg || 0,
+            awayAvg: pred.awayAvg || 0,
+            confidence: pred.probability >= 0.61 ? 'high' : pred.probability >= 0.59 ? 'medium' : 'low',
+            bestBookmaker,
+            bestOdds: Number(bestOdds.toFixed(2)),
+            bestEV: Number(ev.toFixed(1)),
+            bestUrl: null,
+            allBookmakers,
+            type: pred.type || 'match',
+            hasRealOdds: true
+          };
+        })
+        .filter(bet => bet !== null);
+
+      if (valueBets.length > 0) {
+        valueBetMatches.push({
+          matchId: `${match.leagueCode}_${match.matchId}`,
+          homeTeam: match.homeTeam.name,
+          awayTeam: match.awayTeam.name,
+          kickoff: match.kickoff,
+          league: match.leagueName,
+          leagueCode: match.leagueCode,
+          country: match.country,
+          valueBets: valueBets.slice(0, 10),
+          bestEV: Math.max(...valueBets.map(b => b.bestEV)),
+          totalEV: valueBets.reduce((sum, b) => sum + b.bestEV, 0),
+          hasRealOdds: valueBets.some(b => b.hasRealOdds)
+        });
+      }
+    }
+
+    // Store in cache
+    cache.football.data = {
+      leagues: footballDataService.getSupportedLeagues(),
+      matches: valueBetMatches,
+      totalMatches: valueBetMatches.length,
+      totalBets: valueBetMatches.reduce((sum, m) => sum + m.valueBets.length, 0)
+    };
+    cache.football.lastUpdated = new Date().toISOString();
+    cache.football.isLoading = false;
+
+    console.log(`[CACHE] Football cache refreshed successfully!`);
+    console.log(`[CACHE]    Leagues: ${cache.football.data.leagues.length}`);
+    console.log(`[CACHE]    Matches with bets: ${valueBetMatches.length}`);
+    console.log(`[CACHE]    Total bets: ${cache.football.data.totalBets}`);
+    console.log(`[CACHE]    Last updated: ${cache.football.lastUpdated}`);
+
+  } catch (err) {
+    console.error('[CACHE] Football cache refresh failed:', err.message);
+    cache.football.isLoading = false;
+  }
+}
+
+// GET /api/football/leagues - Get all supported leagues
+app.get("/api/football/leagues", (req, res) => {
+  try {
+    const leagues = footballDataService.getSupportedLeagues();
+    res.json({
+      success: true,
+      leagues,
+      count: leagues.length
+    });
+  } catch (err) {
+    console.error("[Football] Error:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/football/matches - Get upcoming matches across all leagues
+app.get("/api/football/matches", async (req, res) => {
+  try {
+    const { league } = req.query;
+
+    if (league) {
+      // Get matches for specific league
+      const matches = await footballDataService.getTodaysMatches(league);
+      res.json({
+        success: true,
+        league,
+        matches,
+        count: matches.length
+      });
+    } else {
+      // Get matches for all leagues
+      const matches = await footballDataService.getAllTodaysMatches();
+      res.json({
+        success: true,
+        matches,
+        count: matches.length
+      });
+    }
+  } catch (err) {
+    console.error("[Football] Error:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/football/value-bets - Get value bets across all leagues
+app.get("/api/football/value-bets", async (req, res) => {
+  try {
+    const { minEV = 0, maxOdds = 10, limit = 100, league } = req.query;
+
+    // Check if cache is available
+    if (!cache.football.data || !cache.football.data.matches) {
+      if (!cache.football.isLoading) {
+        refreshFootballCache();
+      }
+
+      return res.json({
+        success: true,
+        matches: [],
+        totalBets: 0,
+        totalMatches: 0,
+        leagues: footballDataService.getSupportedLeagues(),
+        source: 'cache',
+        cacheUpdatedAt: cache.football.lastUpdated,
+        generatedAt: new Date().toISOString(),
+        message: 'Cache is loading, please retry in a few seconds'
+      });
+    }
+
+    // Filter by league if specified
+    let matches = cache.football.data.matches;
+    if (league) {
+      matches = matches.filter(m => m.leagueCode === league);
+    }
+
+    // Filter by EV and odds
+    matches = matches.map(m => ({
+      ...m,
+      valueBets: m.valueBets.filter(b =>
+        b.bestEV >= parseFloat(minEV) &&
+        b.bestOdds <= parseFloat(maxOdds)
+      )
+    })).filter(m => m.valueBets.length > 0);
+
+    // Sort by best EV and apply limit
+    matches.sort((a, b) => b.bestEV - a.bestEV);
+    const limitedMatches = matches.slice(0, parseInt(limit));
+
+    res.json({
+      success: true,
+      matches: limitedMatches,
+      totalBets: limitedMatches.reduce((sum, m) => sum + m.valueBets.length, 0),
+      totalMatches: limitedMatches.length,
+      leagues: cache.football.data.leagues,
+      source: 'cache',
+      cacheUpdatedAt: cache.football.lastUpdated,
+      generatedAt: new Date().toISOString()
+    });
+
+  } catch (err) {
+    console.error("[Football] Error:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/football/cache-status - Check multi-league football cache status
+app.get("/api/football/cache-status", (req, res) => {
+  res.json({
+    hasData: !!cache.football.data,
+    isLoading: cache.football.isLoading,
+    lastUpdated: cache.football.lastUpdated,
+    matchCount: cache.football.data?.matches?.length || 0,
+    betCount: cache.football.data?.totalBets || 0,
+    leagues: cache.football.data?.leagues || []
+  });
+});
+
+// POST /api/football/refresh-cache - Manually trigger multi-league cache refresh
+app.post("/api/football/refresh-cache", async (req, res) => {
+  if (cache.football.isLoading) {
+    return res.status(202).json({ message: 'Cache refresh already in progress' });
+  }
+  refreshFootballCache();
+  res.json({ message: 'Multi-league football cache refresh started' });
+});
+
 // ---------------- NBA ENDPOINTS ----------------
 
 // GET /api/nba/todays-props - Get today's NBA props (from cache)
@@ -1949,6 +2215,11 @@ app.listen(PORT, () => {
     refreshNBACache();
   });
 
+  cron.schedule('45 */2 * * *', () => {
+    console.log('[CRON] Running scheduled multi-league football cache refresh...');
+    refreshFootballCache();
+  });
+
   console.log('[CRON] Scheduled cache refresh jobs (every 2 hours)');
 
   // Initial cache population on server startup
@@ -1964,4 +2235,14 @@ app.listen(PORT, () => {
     console.log('[CACHE] Populating NBA cache...');
     refreshNBACache();
   }, 10000); // 10 second delay
+
+  // Football-data.org multi-league cache (only if API key is configured)
+  if (process.env.FOOTBALL_DATA_API_KEY && process.env.FOOTBALL_DATA_API_KEY !== 'YOUR_API_KEY_HERE') {
+    setTimeout(() => {
+      console.log('[CACHE] Populating multi-league football cache...');
+      refreshFootballCache();
+    }, 15000); // 15 second delay
+  } else {
+    console.log('[CACHE] Skipping multi-league football cache - FOOTBALL_DATA_API_KEY not configured');
+  }
 });
