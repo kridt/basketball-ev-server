@@ -1901,8 +1901,9 @@ async function refreshFootballCache() {
   console.log('[CACHE] Starting multi-league football cache refresh...');
 
   try {
-    const minProb = 0.58;
-    const maxProb = 0.62;
+    // Using wider range (55-70%) to capture more value opportunities
+    const minProb = 0.55;
+    const maxProb = 0.70;
 
     // Get all value bets across all leagues
     const matchesWithPredictions = await footballDataService.getAllValueBets(minProb, maxProb);
