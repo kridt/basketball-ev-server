@@ -13,14 +13,14 @@ class EPLOddsService {
   }
 
   /**
-   * Search for EPL matches by team name
+   * Search for football matches by team name (all leagues)
    */
-  async searchEPLMatches(teamName) {
+  async searchEPLMatches(teamName, leagueFilter = null) {
     try {
       const encodedTeam = encodeURIComponent(teamName);
       const url = `${this.baseUrl}/events/search?apiKey=${this.apiKey}&query=${encodedTeam}`;
 
-      console.log(`[EPL Odds] Searching for matches: ${teamName}`);
+      console.log(`[Odds] Searching for matches: ${teamName}`);
 
       const response = await fetch(url);
       if (!response.ok) {
@@ -29,22 +29,54 @@ class EPLOddsService {
 
       const matches = await response.json();
 
-      // Filter for EPL/Premier League matches (exclude simulated reality league)
-      const eplMatches = matches.filter(match =>
-        match.status === 'pending' &&
-        (match.league?.slug === 'england-premier-league' ||
-         match.league?.slug === 'eng-premier-league' ||
-         match.league?.name?.toLowerCase().includes('premier league') ||
-         match.league?.name?.toLowerCase().includes('epl')) &&
-        !match.league?.name?.toLowerCase().includes('simulated') &&
-        !match.league?.name?.toLowerCase().includes('srl') &&
-        new Date(match.date) > new Date()
-      ).sort((a, b) => new Date(a.date) - new Date(b.date));
+      // Supported league slugs for filtering
+      const supportedLeagues = [
+        'england-premier-league', 'eng-premier-league',
+        'germany-bundesliga', 'ger-bundesliga',
+        'italy-serie-a', 'ita-serie-a',
+        'spain-la-liga', 'esp-la-liga', 'spain-primera-division',
+        'france-ligue-1', 'fra-ligue-1',
+        'uefa-champions-league', 'champions-league',
+        'uefa-europa-league', 'europa-league',
+        'uefa-conference-league', 'conference-league'
+      ];
 
-      console.log(`[EPL Odds] Found ${eplMatches.length} EPL matches for "${teamName}"`);
-      return eplMatches;
+      // Filter for supported football matches (exclude simulated reality league)
+      const footballMatches = matches.filter(match => {
+        if (match.status !== 'pending') return false;
+        if (new Date(match.date) <= new Date()) return false;
+
+        // Exclude simulated/virtual leagues
+        const leagueName = match.league?.name?.toLowerCase() || '';
+        const leagueSlug = match.league?.slug?.toLowerCase() || '';
+        if (leagueName.includes('simulated') || leagueName.includes('srl') ||
+            leagueName.includes('virtual') || leagueName.includes('esports')) {
+          return false;
+        }
+
+        // Check if league is in our supported list or contains known league names
+        const isSupported = supportedLeagues.some(sl => leagueSlug.includes(sl) || sl.includes(leagueSlug)) ||
+          leagueName.includes('premier league') ||
+          leagueName.includes('bundesliga') ||
+          leagueName.includes('serie a') ||
+          leagueName.includes('la liga') ||
+          leagueName.includes('ligue 1') ||
+          leagueName.includes('champions league') ||
+          leagueName.includes('europa league');
+
+        // If a specific league filter is provided, use it
+        if (leagueFilter) {
+          return leagueSlug.includes(leagueFilter.toLowerCase()) ||
+                 leagueName.includes(leagueFilter.toLowerCase());
+        }
+
+        return isSupported;
+      }).sort((a, b) => new Date(a.date) - new Date(b.date));
+
+      console.log(`[Odds] Found ${footballMatches.length} football matches for "${teamName}"`);
+      return footballMatches;
     } catch (error) {
-      console.error('[EPL Odds] Error searching matches:', error.message);
+      console.error('[Odds] Error searching matches:', error.message);
       return [];
     }
   }
