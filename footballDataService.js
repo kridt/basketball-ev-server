@@ -309,8 +309,9 @@ class FootballDataService {
 
   /**
    * Get match predictions based on team form
+   * Using wider probability range (55-70%) to capture more value opportunities
    */
-  async generateMatchPredictions(match, minProb = 0.58, maxProb = 0.62) {
+  async generateMatchPredictions(match, minProb = 0.55, maxProb = 0.70) {
     const predictions = [];
 
     try {
@@ -333,10 +334,11 @@ class FootballDataService {
       const expectedAwayGoals = (parseFloat(awayStats.avgGoalsFor) + parseFloat(homeStats.avgGoalsAgainst)) / 2;
       const expectedTotalGoals = expectedHomeGoals + expectedAwayGoals;
 
-      console.log(`[Football-Data] ${match.homeTeam.name} vs ${match.awayTeam.name}: Expected total ${expectedTotalGoals.toFixed(2)}`);
+      console.log(`[Football-Data] ${match.homeTeam.name} vs ${match.awayTeam.name}: Expected total ${expectedTotalGoals.toFixed(2)} (H: ${expectedHomeGoals.toFixed(2)}, A: ${expectedAwayGoals.toFixed(2)})`);
 
       // Generate over/under predictions for total goals
-      const totalGoalsLines = [1.5, 2.5, 3.5, 4.5];
+      // Include more lines to capture more opportunities
+      const totalGoalsLines = [0.5, 1.5, 2.5, 3.5, 4.5, 5.5];
 
       for (const line of totalGoalsLines) {
         // Calculate probability using Poisson-like approximation
@@ -377,6 +379,7 @@ class FootballDataService {
       const homeScoreProb = 1 - Math.exp(-expectedHomeGoals); // Poisson P(X >= 1)
       const awayScoreProb = 1 - Math.exp(-expectedAwayGoals);
       const bttsProb = homeScoreProb * awayScoreProb;
+      const noBttsProb = 1 - bttsProb;
 
       if (bttsProb >= minProb && bttsProb <= maxProb) {
         predictions.push({
@@ -391,6 +394,83 @@ class FootballDataService {
           matchPrediction: null
         });
       }
+
+      if (noBttsProb >= minProb && noBttsProb <= maxProb) {
+        predictions.push({
+          type: 'match',
+          statKey: 'btts',
+          line: null,
+          side: 'no',
+          probability: noBttsProb,
+          fairOdds: 1 / noBttsProb,
+          homeAvg: parseFloat(homeStats.avgGoalsFor),
+          awayAvg: parseFloat(awayStats.avgGoalsFor),
+          matchPrediction: null
+        });
+      }
+
+      // Home/Away team to score predictions
+      if (homeScoreProb >= minProb && homeScoreProb <= maxProb) {
+        predictions.push({
+          type: 'match',
+          statKey: 'home_to_score',
+          line: 0.5,
+          side: 'over',
+          probability: homeScoreProb,
+          fairOdds: 1 / homeScoreProb,
+          homeAvg: parseFloat(homeStats.avgGoalsFor),
+          awayAvg: parseFloat(awayStats.avgGoalsFor),
+          matchPrediction: expectedHomeGoals
+        });
+      }
+
+      if (awayScoreProb >= minProb && awayScoreProb <= maxProb) {
+        predictions.push({
+          type: 'match',
+          statKey: 'away_to_score',
+          line: 0.5,
+          side: 'over',
+          probability: awayScoreProb,
+          fairOdds: 1 / awayScoreProb,
+          homeAvg: parseFloat(homeStats.avgGoalsFor),
+          awayAvg: parseFloat(awayStats.avgGoalsFor),
+          matchPrediction: expectedAwayGoals
+        });
+      }
+
+      // Clean sheet predictions
+      const homeCleanSheetProb = Math.exp(-expectedAwayGoals); // Poisson P(Away = 0)
+      const awayCleanSheetProb = Math.exp(-expectedHomeGoals); // Poisson P(Home = 0)
+
+      if (homeCleanSheetProb >= minProb && homeCleanSheetProb <= maxProb) {
+        predictions.push({
+          type: 'match',
+          statKey: 'home_clean_sheet',
+          line: null,
+          side: 'yes',
+          probability: homeCleanSheetProb,
+          fairOdds: 1 / homeCleanSheetProb,
+          homeAvg: parseFloat(homeStats.avgGoalsAgainst),
+          awayAvg: parseFloat(awayStats.avgGoalsFor),
+          matchPrediction: expectedAwayGoals
+        });
+      }
+
+      if (awayCleanSheetProb >= minProb && awayCleanSheetProb <= maxProb) {
+        predictions.push({
+          type: 'match',
+          statKey: 'away_clean_sheet',
+          line: null,
+          side: 'yes',
+          probability: awayCleanSheetProb,
+          fairOdds: 1 / awayCleanSheetProb,
+          homeAvg: parseFloat(homeStats.avgGoalsFor),
+          awayAvg: parseFloat(awayStats.avgGoalsAgainst),
+          matchPrediction: expectedHomeGoals
+        });
+      }
+
+      console.log(`[Football-Data] Generated ${predictions.length} predictions for ${match.homeTeam.name} vs ${match.awayTeam.name}`);
 
       // Sort by probability
       predictions.sort((a, b) => b.probability - a.probability);
