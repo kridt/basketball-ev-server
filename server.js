@@ -1625,6 +1625,131 @@ app.get("/api/epl/match/:gameId/analysis", async (req, res) => {
   }
 });
 
+// ---------------- EV BETS ENDPOINT (for betsapi-dk-next10 frontend) ----------------
+
+// GET /api/ev-bets - Get value bets in the format expected by the frontend
+app.get("/api/ev-bets", (req, res) => {
+  try {
+    const { minEV = 0, maxOdds = 10, limit = 100, league } = req.query;
+
+    // Check if EPL cache is available
+    if (!cache.epl.data || !cache.epl.data.matches) {
+      // Trigger cache refresh if empty
+      if (!cache.epl.isLoading) {
+        refreshEPLCache();
+      }
+
+      return res.json({
+        success: true,
+        matches: [],
+        totalBets: 0,
+        totalMatches: 0,
+        source: 'cache',
+        cacheUpdatedAt: cache.epl.lastUpdated,
+        generatedAt: new Date().toISOString(),
+        message: 'Cache is loading, please retry in a few seconds'
+      });
+    }
+
+    // Transform EPL predictions to value bet format
+    const valueBetMatches = [];
+
+    for (const match of cache.epl.data.matches) {
+      // Filter predictions and convert to value bets format
+      const valueBets = match.predictions
+        .filter(pred => pred.probability >= (parseFloat(minEV) + 58)) // Convert minEV to probability threshold
+        .map(pred => {
+          // Calculate estimated EV based on probability vs typical bookmaker margin
+          const fairOdds = pred.fairOdds;
+          const typicalBookmakerOdds = fairOdds * 0.92; // ~8% margin
+          const estimatedBestOdds = fairOdds * 0.97; // Assume 3% edge available
+          const ev = ((pred.probability / 100) * estimatedBestOdds - 1) * 100;
+
+          return {
+            matchId: `EPL_${match.gameId}`,
+            statKey: pred.statKey,
+            market: pred.statKey,
+            selection: pred.side,
+            line: pred.line,
+            probability: pred.probability,
+            fairOdds: fairOdds,
+            predictedTotal: pred.matchPrediction || (pred.homeAvg + pred.awayAvg),
+            homeAvg: pred.homeAvg || 0,
+            awayAvg: pred.awayAvg || 0,
+            confidence: pred.probability >= 61 ? 'high' : pred.probability >= 59 ? 'medium' : 'low',
+            // Placeholder bookmaker data since we don't have live odds
+            bestBookmaker: 'Fair Value',
+            bestOdds: Number(estimatedBestOdds.toFixed(2)),
+            bestEV: Number(ev.toFixed(1)),
+            bestUrl: null,
+            allBookmakers: [{
+              bookmaker: 'Fair Value',
+              odds: Number(estimatedBestOdds.toFixed(2)),
+              line: pred.line,
+              url: null,
+              ev: Number(ev.toFixed(1))
+            }],
+            type: pred.type || 'match'
+          };
+        })
+        .filter(bet => bet.bestOdds <= parseFloat(maxOdds) && bet.bestEV >= parseFloat(minEV));
+
+      if (valueBets.length > 0) {
+        valueBetMatches.push({
+          matchId: `EPL_${match.gameId}`,
+          homeTeam: match.home_team.name,
+          awayTeam: match.away_team.name,
+          kickoff: match.kickoff,
+          league: 'Premier League',
+          leagueCode: 'PL',
+          valueBets: valueBets.slice(0, 10), // Limit per match
+          bestEV: Math.max(...valueBets.map(b => b.bestEV)),
+          totalEV: valueBets.reduce((sum, b) => sum + b.bestEV, 0)
+        });
+      }
+    }
+
+    // Sort by best EV and apply limit
+    valueBetMatches.sort((a, b) => b.bestEV - a.bestEV);
+    const limitedMatches = valueBetMatches.slice(0, parseInt(limit));
+
+    res.json({
+      success: true,
+      matches: limitedMatches,
+      totalBets: limitedMatches.reduce((sum, m) => sum + m.valueBets.length, 0),
+      totalMatches: limitedMatches.length,
+      source: 'cache',
+      cacheUpdatedAt: cache.epl.lastUpdated,
+      generatedAt: new Date().toISOString()
+    });
+
+  } catch (err) {
+    console.error("[EV-BETS] Error:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/ev-bets/refresh - Manually trigger EPL cache refresh
+app.post("/api/ev-bets/refresh", async (req, res) => {
+  try {
+    if (cache.epl.isLoading) {
+      return res.status(202).json({ success: true, message: 'Cache refresh already in progress' });
+    }
+
+    console.log('[EV-BETS] Manual refresh triggered');
+    refreshEPLCache();
+
+    res.json({
+      success: true,
+      message: 'Cache refresh started',
+      previousUpdate: cache.epl.lastUpdated
+    });
+  } catch (err) {
+    console.error("[EV-BETS] Refresh error:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // ---------------- NBA ENDPOINTS ----------------
 
 // GET /api/nba/todays-props - Get today's NBA props (from cache)
