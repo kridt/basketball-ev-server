@@ -1657,13 +1657,13 @@ app.get("/api/ev-bets", (req, res) => {
     for (const match of cache.epl.data.matches) {
       // Filter predictions and convert to value bets format
       const valueBets = match.predictions
-        .filter(pred => pred.probability >= (parseFloat(minEV) + 58)) // Convert minEV to probability threshold
+        .filter(pred => pred.probability >= 59) // Only high probability predictions
         .map(pred => {
-          // Calculate estimated EV based on probability vs typical bookmaker margin
+          // Calculate EV assuming we can find bookmaker odds ~5% higher than fair
           const fairOdds = pred.fairOdds;
-          const typicalBookmakerOdds = fairOdds * 0.92; // ~8% margin
-          const estimatedBestOdds = fairOdds * 0.97; // Assume 3% edge available
-          const ev = ((pred.probability / 100) * estimatedBestOdds - 1) * 100;
+          const estimatedBestOdds = Number((fairOdds * 1.05).toFixed(2)); // Assume bookmaker offers 5% higher
+          const probDecimal = pred.probability / 100;
+          const ev = ((probDecimal * estimatedBestOdds) - 1) * 100;
 
           return {
             matchId: `EPL_${match.gameId}`,
