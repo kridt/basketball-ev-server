@@ -1672,13 +1672,15 @@ app.get("/api/ev-bets", async (req, res) => {
     const valueBetMatches = [];
 
     for (const match of cache.epl.data.matches) {
-      // Fetch real bookmaker odds for this match if enabled
+      // Fetch real bookmaker odds for this match if enabled (with league filtering for accurate matching)
       let matchOdds = null;
       if (shouldFetchOdds) {
         try {
           matchOdds = await eplOddsService.getAllMatchOdds(
             match.home_team.name,
-            match.away_team.name
+            match.away_team.name,
+            'england-premier-league',  // EPL cache is always Premier League
+            match.kickoff              // Pass kickoff for date validation
           );
         } catch (e) {
           console.log(`[EV-BETS] Could not fetch odds for ${match.home_team.name} vs ${match.away_team.name}:`, e.message);
@@ -1912,15 +1914,17 @@ async function refreshFootballCache() {
     const valueBetMatches = [];
 
     for (const match of matchesWithPredictions) {
-      // Try to fetch real bookmaker odds
+      // Try to fetch real bookmaker odds (with league filtering for accurate matching)
       let matchOdds = null;
       try {
         matchOdds = await eplOddsService.getAllMatchOdds(
           match.homeTeam.name,
-          match.awayTeam.name
+          match.awayTeam.name,
+          match.oddsSlug,  // Pass league slug for filtering (e.g., 'england-premier-league')
+          match.kickoff    // Pass kickoff for date validation
         );
       } catch (e) {
-        console.log(`[Football] Could not fetch odds for ${match.homeTeam.name} vs ${match.awayTeam.name}`);
+        console.log(`[Football] Could not fetch odds for ${match.homeTeam.name} vs ${match.awayTeam.name} (${match.oddsSlug})`);
       }
 
       const valueBets = match.predictions

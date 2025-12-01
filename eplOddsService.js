@@ -155,11 +155,15 @@ class EPLOddsService {
   }
 
   /**
-   * Find match between two teams
+   * Find match between two teams with league and date filtering
+   * @param {string} homeTeam - Home team name
+   * @param {string} awayTeam - Away team name
+   * @param {string} leagueSlug - League slug for filtering (e.g., 'england-premier-league')
+   * @param {string} kickoffDate - Expected kickoff date/time for validation
    */
-  async findMatch(homeTeam, awayTeam) {
-    // Try searching for home team first
-    const matches = await this.searchEPLMatches(homeTeam);
+  async findMatch(homeTeam, awayTeam, leagueSlug = null, kickoffDate = null) {
+    // Try searching for home team first, with league filter
+    const matches = await this.searchEPLMatches(homeTeam, leagueSlug);
 
     // Find match with matching away team (exclude SRL/simulated teams)
     const match = matches.find(m => {
@@ -173,15 +177,26 @@ class EPLOddsService {
         return false;
       }
 
+      // If kickoff date provided, validate it's the same day (within 24 hours)
+      if (kickoffDate) {
+        const matchDate = new Date(m.date);
+        const expectedDate = new Date(kickoffDate);
+        const hoursDiff = Math.abs(matchDate - expectedDate) / (1000 * 60 * 60);
+        if (hoursDiff > 24) {
+          console.log(`[EPL Odds] Skipping ${m.home} vs ${m.away} - wrong date (${m.date} vs ${kickoffDate})`);
+          return false;
+        }
+      }
+
       // Check if teams match (partial matching for flexibility)
       return (home.includes(homeSearch) || homeSearch.includes(home.split(' ')[0])) &&
              (away.includes(awaySearch) || awaySearch.includes(away.split(' ')[0]));
     });
 
     if (match) {
-      console.log(`[EPL Odds] Found match: ${match.home} vs ${match.away} (ID: ${match.id})`);
+      console.log(`[EPL Odds] Found match: ${match.home} vs ${match.away} (ID: ${match.id}, League: ${match.league?.name || 'unknown'})`);
     } else {
-      console.log(`[EPL Odds] No match found for ${homeTeam} vs ${awayTeam}`);
+      console.log(`[EPL Odds] No match found for ${homeTeam} vs ${awayTeam} (league: ${leagueSlug || 'any'})`);
     }
 
     return match;
@@ -367,12 +382,16 @@ class EPLOddsService {
 
   /**
    * Get all available odds for a match (goals, corners, cards)
+   * @param {string} homeTeam - Home team name
+   * @param {string} awayTeam - Away team name
+   * @param {string} leagueSlug - League slug for filtering (e.g., 'england-premier-league')
+   * @param {string} kickoffDate - Expected kickoff date/time for validation
    */
-  async getAllMatchOdds(homeTeam, awayTeam) {
+  async getAllMatchOdds(homeTeam, awayTeam, leagueSlug = null, kickoffDate = null) {
     try {
-      const match = await this.findMatch(homeTeam, awayTeam);
+      const match = await this.findMatch(homeTeam, awayTeam, leagueSlug, kickoffDate);
       if (!match) {
-        console.log(`[EPL Odds] Match not found for ${homeTeam} vs ${awayTeam}`);
+        console.log(`[EPL Odds] Match not found for ${homeTeam} vs ${awayTeam} (league: ${leagueSlug || 'any'})`);
         return null;
       }
 
